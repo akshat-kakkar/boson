@@ -18,7 +18,7 @@
 import cPickle
 
 import sqlalchemy as sa
-from sqlalchemy.exc import declarative as sa_dec
+from sqlalchemy.ext import declarative as sa_dec
 from sqlalchemy import orm
 from sqlalchemy import types as sa_types
 
@@ -78,7 +78,7 @@ class PickledString(sa_types.TypeDecorator):
         """Marshal the value out of its serialized format."""
 
         if value is not None:
-            value = cPickle.loads(value)
+            value = cPickle.loads(str(value))
 
         return value
 

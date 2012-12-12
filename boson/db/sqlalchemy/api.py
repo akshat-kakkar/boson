@@ -14,11 +14,19 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+import datetime
+
+from boson import utils
+from boson.exceptions import Duplicate
 
 from boson.db import api
-from boson.db import models
+from boson.db import models as ref_models
 from boson.db.sqlalchemy import models as sa_models
+from boson.db.sqlalchemy import session as db_session
+from boson.openstack.common import log as logging
 
+
+LOG = logging.getLogger(__name__)
 
 class API(api.API):
     def create_session(self, context):
@@ -30,8 +38,10 @@ class API(api.API):
         :param context: The current context for accessing the
                         database.
         """
-
-        pass
+        self.context = context
+        session = db_session.get_session()
+        self.context.session = session
+        return session
 
     def begin(self, context):
         """
@@ -50,8 +60,9 @@ class API(api.API):
         :param context: The current context for accessing the
                         database.
         """
-
-        pass
+        self.context = context
+        self.context.session.commit()
+        
 
     def rollback(self, context):
         """
@@ -60,8 +71,9 @@ class API(api.API):
         :param context: The current context for accessing the
                         database.
         """
-
-        pass
+        self.session = context.session
+        self.session.rollback()
+        
 
     def create_service(self, context, name, auth_fields):
         """
@@ -80,8 +92,22 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Service``.
         """
-
-        pass
+        service = context.session.query(sa_models.Service).\
+                                filter(sa_models.Service.name==name).first()
+        try:
+            if service is not None:
+                LOG.error('Error in creating new service.Service of same'
+                          'name %s already present'%name)
+                raise Duplicate(klass=service)
+        except Exception as err:
+            LOG.exception(err)
+        new_service = sa_models.Service(id=utils.generate_uuid(),
+                                        name=name,
+                                        created_at=datetime.datetime.now(),
+                                        updated_at=datetime.datetime.now(),
+                                        auth_fields=auth_fields)
+        context.session.add(new_service)
+        return new_service
 
     def get_service(self, context, id=None, name=None, hints=None):
         """
@@ -108,9 +134,32 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Service``.
         """
-
-        pass
-
+        try:
+            if id and name is not None:
+                LOG.error('DB access error at service table.Values' 
+                          'of both id and name are not allowed')
+                raise TypeError
+            elif id and name is None:
+                LOG.error('DB access error at service table.Null values'
+                          'of both id and name are not allowed')               
+                raise TypeError
+        except Exception as err:
+            LOG.exception(err)
+        service = context.session.query(sa_models.Service)        
+        if id is not None:
+            service = service.filter(sa_models.Service.id==id)
+        else: 
+            service = service.filter(sa_models.Service.name==name)                    
+        service = service.first()
+        if service is None:
+                try:
+                    LOG.error('No matching service for %s found'%(id or name)) 
+                    raise KeyError(id or name)
+                except Exception as err:
+                    LOG.exception(err)            
+        else:    
+            return service       
+       
     def get_services(self, context, hints=None):
         """
         Retrieve a list of all defined services.
@@ -130,9 +179,8 @@ class API(api.API):
 
         :returns: A list of instances of ``boson.db.models.Service``.
         """
-
         pass
-
+ 
     def create_category(self, context, service, name, usage_fset, quota_fsets):
         """
         Create a new category on a service.  Raises a Duplicate
@@ -167,8 +215,28 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Category``.
         """
-
-        pass
+        if isinstance(sa_models.Service, service):
+            service = service.id        
+        category = context.session.query(sa_models.Category).\
+                                filter(sa_models.Category.name==name).\
+                                filter(sa_models.Category.service_id==service).\
+                                first()
+        try:
+            if category is not None:
+                LOG.error('Error in creating new category.Category of same'
+                      'name %s for service %s is already present'%(name,service))
+                raise Duplicate(klass=category) 
+        except Exception as err:
+            LOG.exception(err)   
+        new_category = sa_models.Category(id=utils.generate_uuid(),
+                                          name=name,
+                                          created_at=datetime.datetime.now(),
+                                          updated_at=datetime.datetime.now(),
+                                          service_id=service,
+                                          usage_fset=usage_fset,
+                                          quota_fsets=quota_fsets)
+        context.session.add(new_category)
+        return new_category
 
     def get_category(self, context, id=None, service=None, name=None,
                      hints=None):
@@ -199,8 +267,35 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Category``.
         """
-
-        pass
+        try:
+            if id and name and service is not None:
+                LOG.error('DB access error at categories table.'
+                          'Values of id,service and name '
+                          'altogether is not allowed')
+                raise TypeError                    
+            elif id and name and service is None:
+                LOG.error('DB access error at categories table.'
+                          'Null values of id,service and name '
+                          'altogether is not allowed')               
+                raise TypeError
+        except Exception as err:
+            LOG.exception(err)
+        category = context.session.query(sa_models.Category)        
+        if id is not None:
+            category = category.filter(sa_models.Category.id==id)
+        else: 
+            category = category.filter(sa_models.Category.name==name).\
+                                    filter(sa_models.Service.id==service.id)
+        category = category.first()                                   
+        if category is None:
+            try:
+                LOG.error("No matching category found for %s"%(name or id))
+                raise KeyError(id or name)
+            except Exception as err:
+                LOG.exception(err)
+        else:    
+            return category
+        
 
     def get_categories(self, context, service, hints=None):
         """
@@ -263,8 +358,33 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Resource``.
         """
-
-        pass
+        if isinstance(sa_models.Service,service):
+            service = service.id
+        if isinstance(sa_models.Category,category):
+            category = category.id
+        resource = context.session.query(sa_models.Resource).\
+                                filter(sa_models.Resource.name==name).\
+                                filter(sa_models.Resource.service_id==service).\
+                                filter(sa_models.Resource.category_id==category).\
+                                first()
+        try:
+            if resource is not None:
+                LOG.error('Error in creating new resource.Resource of same'
+                          'name %s for service %s and category %s is already'
+                          'present'%(name,service,category))
+                raise Duplicate(klass=resource) 
+        except Exception as err:
+            LOG.exception(err) 
+        new_resource = sa_models.Resource(id=utils.generate_uuid(),
+                                          name=name,
+                                          parameters=parameters,
+                                          created_at=datetime.datetime.now(),
+                                          updated_at=datetime.datetime.now(),
+                                          service_id=service,
+                                          category_id=category,
+                                          absolute=absolute)
+        context.session.add(new_resource)
+        return new_resource        
 
     def get_resource(self, context, id=None, service=None, name=None,
                      hints=None):
@@ -295,8 +415,37 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Resource``.
         """
-
-        pass
+        if isinstance(sa_models.Service,service):
+            service = service.id      
+        try:
+            if id and name and service is not None:
+                LOG.error('DB access error at resource table.Values'
+                          'of all id,name and service is not allowed ')
+                raise TypeError
+                    
+            elif id and name and service is None:
+                LOG.error('DB access error at resource table.Null values'
+                          'of all id,name and service is not allowed ')               
+                raise TypeError
+        except Exception as err:
+            LOG.exception(err)
+        resource = context.session.query(sa_models.Resource)        
+        if id is not None:
+            resource = resource.filter(sa_models.Resource.id==id)
+        else: 
+            resource = resource.filter(sa_models.Resource.name==name).\
+                              filter(sa_models.Resource.service_id==service)
+        resource = resource.first()                         
+        if resource is None:
+            try:
+                LOG.error('No matching resource found for requested %s'
+                          'resource'%(name or id))
+                raise KeyError(id or name)
+            except Exception as err:
+                LOG.exception(err)
+        else:    
+            return resource
+        
 
     def get_resources(self, context, service, hints=None):
         """
@@ -319,7 +468,6 @@ class API(api.API):
 
         :returns: A list of instances of ``boson.db.models.Resource``.
         """
-
         pass
 
     def create_usage(self, context, resource, param_data, auth_data, used=0,
@@ -364,8 +512,30 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Usage``.
         """
-
-        pass
+        if isinstance(sa_models.Resource,resource):
+            resource = resource.id
+        usage = context.session.query(sa_models.Usage).\
+                              filter(sa_models.Usage.resource_id==resource).\
+                              filter(sa_models.Usage.auth_data==auth_data).\
+                              filter(sa_models.Usage.parameter_data==param_data).\
+                              first()
+        try:
+            if usage is not None:
+                LOG.error('Error in creating new usage.Usage for same'
+                          'resource %s is already present'%(resource))
+                raise Duplicate(klass=usage) 
+        except Exception as err:
+            LOG.exception(err) 
+        new_usage = sa_models.Usage(id=utils.generate_uuid(),
+                                    created_at=datetime.datetime.now(),
+                                    updated_at=datetime.datetime.now(),
+                                    parameter_data=param_data,
+                                    auth_data=auth_data,
+                                    resource_id=resource,
+                                    until_refresh=until_refresh,
+                                    refresh_id=refresh_id)
+        context.session.add(new_usage)
+        return new_usage        
 
     def get_usage(self, context, id=None, resource=None, param_data=None,
                   auth_data=None, hints=None):
@@ -401,7 +571,38 @@ class API(api.API):
         :returns: An instance of ``boson.db.models.Usage``.
         """
 
-        pass
+        if isinstance(sa_models.Resource,resource):
+            resource = resource.id
+        try:  
+            if id and resource and param_data and auth_data is not None:
+                LOG.error('DB access error at usage table.Values for id,'
+                          'resource,param_data and auth_data altogether'
+                          'is not allowed')
+                raise TypeError                    
+            elif id and resource and param_data and auth_data is None:
+                LOG.error('DB access error at usage table.Null values for'
+                          'id,resource,param_data and auth_data altogether'
+                          'is not allowed')
+                raise TypeError
+        except Exception as err:
+            LOG.exception(err)
+        usage = context.session.query(sa_models.Usage)        
+        if id is not None:
+            usage = usage.filter(sa_models.Usage.id==id)
+        else: 
+            usage = usage.filter(sa_models.Usage.resource_id==resource).\
+                        filter(sa_models.Usage.parameter_data==param_data).\
+                        filter(sa_models.Usage.auth_data==auth_data)
+        usage = usage.first()                         
+        if usage is None:
+            try:
+                LOG.error('No matching usage found for %s'
+                           %(id or resource))
+                raise KeyError(id or resource)
+            except Exception as err:
+                LOG.exception(err)
+        else:    
+            return usage
 
     def get_usages(self, context, resource=None, param_data=None,
                    auth_data=None, hints=None):
@@ -438,7 +639,7 @@ class API(api.API):
     def create_quota(self, context, resource, auth_data, limit=None):
         """
         Create a new quota for a given resource and user.  Raises a
-        Duplicate exception in the event that the new usage is a
+        Duplicate exception in the event that the new quota is a
         duplicate of an existing quota.
 
         :param context: The current context for accessing the
@@ -455,8 +656,28 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Quota``.
         """
-
-        pass
+        if isinstance(sa_models.Resource,resource):
+            resource = resource.id
+        quota = context.session.query(sa_models.Quota).\
+                              filter(sa_models.Quota.resource_id==resource).\
+                              filter(sa_models.Quota.auth_data==auth_data).\
+                              first()
+        try:
+            if quota is not None:
+                LOG.error('Error in creating new quota.Quota for same'
+                          'resource %s is already present'%(resource))
+                raise Duplicate(klass=quota) 
+        except Exception as err:
+            LOG.exception(err) 
+              
+        new_quota = sa_models.Quota(id=utils.generate_uuid(),
+                                    created_at=datetime.datetime.now(),
+                                    updated_at=datetime.datetime.now(),
+                                    resorce_id=resource,
+                                    auth_data=auth_data,
+                                    limit=limit)
+        context.session.add(new_quota)
+        return new_quota        
 
     def get_quota(self, context, id=None, resource=None, auth_data=None,
                   hints=None):
@@ -490,7 +711,34 @@ class API(api.API):
         :returns: An instance of ``boson.db.models.Quota``.
         """
 
-        pass
+        if isinstance(sa_models.Resource,resource):
+            resource = resource.id
+        try:       
+            if id and resource and auth_data is not None:
+                LOG.error('DB access error at quota table.Values for id,'
+                      'resource and auth_data altogether is not allowed')
+                raise TypeError                    
+            elif id and resource and auth_data is None:
+                LOG.error('DB access error at quota table.Values for id,'
+                      'resource and auth_data altogether is not allowed')
+                raise TypeError
+        except Exception as err:
+            LOG.exception(err)
+        quota = context.session.query(sa_models.Quota)        
+        if id is not None:
+            quota = quota.filter(sa_models.Quota.id==id)
+        else: 
+            quota = quota.filter(sa_models.Quota.resource_id==resource).\
+                        filter(sa_models.Quota.auth_data==auth_data)
+        quota = quota.first()                         
+        if quota is None:
+            try:
+                LOG.error('No matching quota found for %s'%(id or resource))
+                raise KeyError(id or resource)
+            except Exception as err:
+                LOG.exception(err)
+        else:    
+            return quota
 
     def get_quotas(self, context, resource=None, auth_data=None, hints=None):
         """
@@ -530,8 +778,13 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Reservation``.
         """
-
-        pass
+        new_reservation = sa_models.Reservation(id=utils.generate_uuid(),
+                                    created_at=datetime.datetime.now(),
+                                    updated_at=datetime.datetime.now(),
+                                    expire=expire)
+        context.session.add(new_reservation)
+        return new_reservation
+        
 
     def reserve(self, context, reservation, resource, usage, delta):
         """
@@ -553,8 +806,24 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.ReservedItem``.
         """
+        if isinstance(sa_models.Reservation, reservation):
+            reservation = reservation.id
+            
+        if isinstance(sa_models.Resource, resource):
+            resource = resource.id
+            
+        if isinstance(sa_models.Usage,usage):
+            usage = usage.id
 
-        pass
+        new_reserved_items = sa_models.ReservedItem(id=utils.generate_uuid(),
+                                    created_at=datetime.datetime.now(),
+                                    updated_at=datetime.datetime.now(),
+                                    reservation_id=reservation,
+                                    resorce_id=resource,
+                                    usage_id=usage,
+                                    delta=delta)
+        context.session.add(new_reserved_items)
+        return new_reserved_items
 
     def get_reservation(self, context, id, hints=None):
         """
@@ -580,7 +849,19 @@ class API(api.API):
         :returns: An instance of ``boson.db.models.Reservation``.
         """
 
-        pass
+        reservation = context.session.query(sa_models.Reservation)
+        
+        if id is not None:
+            reservation = reservation.filter(sa_models.Reservation.id==id)
+            reservation = reservation.first()
+        
+        if reservation is not None:
+            try:
+                LOG.error("No matching reservation found for %s id"%(id))
+                raise KeyError(id)
+            except Exception as err:
+                LOG.exception(err) 
+        return reservation
 
     def expire_reservations(self, context):
         """
@@ -648,8 +929,9 @@ class API(api.API):
         :param base_obj: The underlying database object to save to the
                          database.
         """
-
-        pass
+        #Here I have assumed that base_obj is the modified db object
+        context.session.commit()
+        
 
     def _delete(self, context, base_obj):
         """
@@ -662,4 +944,5 @@ class API(api.API):
                          the database.
         """
 
-        pass
+        context.session.delete(base_obj)
+
