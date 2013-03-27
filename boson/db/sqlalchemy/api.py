@@ -20,7 +20,6 @@ from boson import utils
 from boson.exceptions import Duplicate
 
 from boson.db import api
-from boson.db import models as ref_models
 from boson.db.sqlalchemy import models as sa_models
 from boson.db.sqlalchemy import session as db_session
 from boson.openstack.common import log as logging
@@ -179,7 +178,13 @@ class API(api.API):
 
         :returns: A list of instances of ``boson.db.models.Service``.
         """
-        pass
+        all_services = context.session.query(sa_models.Service).all()
+        if not all_services:
+            LOG.error("No service found to be registered")
+            return all_services
+        else:
+            return all_services
+        
  
     def create_category(self, context, service, name, usage_fset, quota_fsets):
         """
@@ -318,8 +323,27 @@ class API(api.API):
 
         :returns: A list of instances of ``boson.db.models.Category``.
         """
-
-        pass
+        try:
+            if service is None:
+                LOG.error('DB Access Error in categories table'
+                          'Value of service must be provided')
+                raise TypeError()
+        except Exception as err:
+            LOG.exception(err)
+        
+        if isinstance(service, sa_models.Service):
+            service_id = service.id
+        else:
+            service_id = service
+            
+        all_categories = context.session.query(sa_models.Category).\
+                                         filter(sa_models.Service.id == service_id).\
+                                         all()
+        if not all_categories:
+            LOG.error('No matching category could be found for service %s' %(service_id))
+            raise KeyError(service_id)
+        else:
+            return all_categories
 
     def create_resource(self, context, service, category, name, parameters,
                         absolute=False):
@@ -358,9 +382,9 @@ class API(api.API):
 
         :returns: An instance of ``boson.db.models.Resource``.
         """
-        if isinstance(sa_models.Service,service):
+        if isinstance(service, sa_models.Service):
             service = service.id
-        if isinstance(sa_models.Category,category):
+        if isinstance(category, sa_models.Category):
             category = category.id
         resource = context.session.query(sa_models.Resource).\
                                 filter(sa_models.Resource.name==name).\
@@ -468,6 +492,28 @@ class API(api.API):
 
         :returns: A list of instances of ``boson.db.models.Resource``.
         """
+        
+        try:
+            if service is None:
+                LOG.error('DB Access Error in resources table'
+                          'Value of service must be provided')
+                raise TypeError()
+        except Exception as err:
+            LOG.exception(err)
+        
+        if isinstance(service, sa_models.Service):
+            service_id = service.id
+        else:
+            service_id = service
+            
+        all_resources = context.session.query(sa_models.Resource).\
+                                         filter(sa_models.Service.id == service_id).\
+                                         all()
+        if not all_resources:
+            LOG.error('No matching resource could be found for service %s' %(service_id))
+            raise KeyError(service_id)
+        else:
+            return all_resources
         pass
 
     def create_usage(self, context, resource, param_data, auth_data, used=0,
@@ -633,7 +679,6 @@ class API(api.API):
 
         :returns: A list of instances of ``boson.db.models.Usage``.
         """
-
         pass
 
     def create_quota(self, context, resource, auth_data, limit=None):
