@@ -24,7 +24,7 @@ class Quota(object):
 
     def __init__(self, resource, category, auth_data=None, limit=None):
         """
-        Initialize a Quota. Testing ...
+        Initialize a Quota. Testing ..
 
         :param resource: The Resource the limit is for.
         :param category: The category of the Quota.
