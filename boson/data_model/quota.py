@@ -29,7 +29,7 @@ class Quota(object):
         :param resource: The Resource the limit is for.
         :param category: The category of the Quota.
         :param auth_data: The authentication and authorization data
-                          relevant to service users.  The most
+                          relevant to service users. The most
                           specific matching quota is applied to a
                           given user.
         :param limit: The limit to apply.  If ``None``, the usage is
